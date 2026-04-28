@@ -1,41 +1,68 @@
-name: ROWDYX FREE RDP 😈
+name: ROWDYX RDP BORE AUTO-RECONNECT 😈
 
 on: 
-  workflow_dispatch:  # Manual trigger se chalayega, chep mat ban
+  workflow_dispatch:
 
 jobs:
-  rdp-bore:
+  rdp-permanent:
     runs-on: windows-latest
-    timeout-minutes: 360  # 6 hours max, baad mein tujhe firse trigger karna padega
+    timeout-minutes: 360  # 6 ghanta, bina roye
     steps:
-      - name: 🖥️ RDP Enable Karna & Password Set
+      - name: 🛡️ Disable Sleep aur Firewall + RDP Enable
         shell: pwsh
         run: |
-          # RDP ko on kar (registry + firewall)
+          # Machine kabhi nahi soegi
+          powercfg /change standby-timeout-ac 0
+          powercfg /change hibernate-timeout-ac 0
+          # RDP on
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          # User 'runneradmin' ke liye password set kar (change kar lena apna mann chahe)
+          # Password daal de same
           $pw = ConvertTo-SecureString "RowdyX@1234" -AsPlainText -Force
           Set-LocalUser -Name "runneradmin" -Password $pw
           Write-Host "RDP Ready! User: runneradmin Pass: RowdyX@1234"
 
-      - name: 🛠️ Bore Download & Setup
+      - name: 🔁 Bore Auto-Restart + RDP Keepalive + Tunnel Logger
         shell: pwsh
         run: |
-          # Bore ka latest release download (windows binary)
+          # Bore download ek baar
           $url = "https://github.com/ekzhang/bore/releases/download/v0.5.2/bore-v0.5.2-x86_64-pc-windows-msvc.zip"
           Invoke-WebRequest -Uri $url -OutFile bore.zip
           Expand-Archive bore.zip -DestinationPath .\
-          # Bore ko chalao, output ko log me dikhao, background mein mat bhejo taaki tunnel alive rahe
-          Write-Host "⏳ Tunnel start ho raha hai..." 
-          .\bore.exe local 3389 --to bore.pub 2>&1 | ForEach-Object {
-            # Bore ka output capture karo, public address alag karo
-            if ($_ -match "listening at (\S+:\d+)") {
-              $tunnel_addr = $matches[1]
-              Write-Host "🔥🔥 RDP CONNECT KAR: $tunnel_addr 🔥🔥"
+          
+          # Background mein RDP service ko har 120 second pe check karo
+          $rdpJob = Start-Job -ScriptBlock {
+            while ($true) {
+              try {
+                $srv = Get-Service TermService -ErrorAction Stop
+                if ($srv.Status -ne 'Running') {
+                  Start-Service TermService
+                }
+              } catch { }
+              Start-Sleep -Seconds 120
             }
-            Write-Host $_
           }
-          # Note: Bore background mein chalta rahega, lekin jab tak pipeline alive hai
-          # Hum infinite wait daalte hain taaki step end na ho
-          Start-Sleep -Seconds 36000  # 10 ghanta, timeout-minutes se kam
+
+          # Bore ko endless loop mein chalao, agar crash/exit ho to 5 sec mein restart
+          Write-Host "🌀 Tunnel loop start, marne nahi denge..."
+          while ($true) {
+            # Chhotu sa logging setup
+            $proc = Start-Process -FilePath ".\bore.exe" -ArgumentList 'local 3389 --to bore.pub' -NoNewWindow -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP/bore_out.log" -RedirectStandardError "$env:RUNNER_TEMP/bore_err.log"
+            
+            # Log file monitor, jab tak process alive hai
+            do {
+              # Check logs for "listening at"
+              $lastLines = Get-Content "$env:RUNNER_TEMP/bore_out.log" -Tail 20
+              foreach ($line in $lastLines) {
+                if ($line -match "listening at (\S+:\d+)") {
+                  Write-Host "🔥🔥 RDP CONNECT KAR: $($matches[1]) 🔥🔥"
+                }
+              }
+              Start-Sleep -Seconds 10
+            } while (-not $proc.HasExited)
+            
+            # Agar bore mar gaya, to 5 sec mein re-launch
+            Write-Host "💤 Bore band, 5 sec mein restart..."
+            Start-Sleep -Seconds 5
+          }
+          # Note: $rdpJob background mein chalta rahega
