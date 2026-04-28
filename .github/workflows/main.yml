@@ -1,68 +1,138 @@
-name: ROWDYX RDP BORE AUTO-RECONNECT 😈
+name: ROWDYX IMMORTAL RDP TUNNEL 😈🔥
 
-on: 
+on:
   workflow_dispatch:
 
 jobs:
-  rdp-permanent:
+  rdp-immortal:
     runs-on: windows-latest
-    timeout-minutes: 360  # 6 ghanta, bina roye
+    timeout-minutes: 360
     steps:
-      - name: 🛡️ Disable Sleep aur Firewall + RDP Enable
+      - name: 🛡️ Prep Windows – RDP & Power
         shell: pwsh
         run: |
-          # Machine kabhi nahi soegi
           powercfg /change standby-timeout-ac 0
           powercfg /change hibernate-timeout-ac 0
-          # RDP on
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-          # Password daal de same
           $pw = ConvertTo-SecureString "RowdyX@1234" -AsPlainText -Force
           Set-LocalUser -Name "runneradmin" -Password $pw
-          Write-Host "RDP Ready! User: runneradmin Pass: RowdyX@1234"
+          # Disable network adapter power saving (wired naam ho sakta hai, try karte hain)
+          Get-NetAdapter | ForEach-Object {
+            Disable-NetAdapterPowerManagement -Name $_.Name -ErrorAction SilentlyContinue
+          }
+          Write-Host "RDP Ready! user: runneradmin pass: RowdyX@1234"
 
-      - name: 🔁 Bore Auto-Restart + RDP Keepalive + Tunnel Logger
+      - name: ♾️ Bore Auto‑Heal + Live Health Check
         shell: pwsh
         run: |
-          # Bore download ek baar
           $url = "https://github.com/ekzhang/bore/releases/download/v0.5.2/bore-v0.5.2-x86_64-pc-windows-msvc.zip"
           Invoke-WebRequest -Uri $url -OutFile bore.zip
           Expand-Archive bore.zip -DestinationPath .\
-          
-          # Background mein RDP service ko har 120 second pe check karo
-          $rdpJob = Start-Job -ScriptBlock {
-            while ($true) {
-              try {
-                $srv = Get-Service TermService -ErrorAction Stop
-                if ($srv.Status -ne 'Running') {
-                  Start-Service TermService
-                }
-              } catch { }
-              Start-Sleep -Seconds 120
+
+          # Global variables
+          $global:TunnelAddress = $null
+          $global:TunnelPort = $null
+          $boreProcess = $null
+
+          # Function: Test tunnel connectivity (TCP connect to tunnel endpoint)
+          function Test-Tunnel {
+            param($address, $port)
+            try {
+              $client = New-Object System.Net.Sockets.TcpClient
+              $async = $client.BeginConnect($address, $port, $null, $null)
+              $wait = $async.AsyncWaitHandle.WaitOne(3000, $false)  # 3 sec timeout
+              if (-not $wait) {
+                $client.Close()
+                return $false
+              }
+              $client.EndConnect($async)
+              $client.Close()
+              return $true
+            } catch {
+              return $false
             }
           }
 
-          # Bore ko endless loop mein chalao, agar crash/exit ho to 5 sec mein restart
-          Write-Host "🌀 Tunnel loop start, marne nahi denge..."
-          while ($true) {
-            # Chhotu sa logging setup
-            $proc = Start-Process -FilePath ".\bore.exe" -ArgumentList 'local 3389 --to bore.pub' -NoNewWindow -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP/bore_out.log" -RedirectStandardError "$env:RUNNER_TEMP/bore_err.log"
-            
-            # Log file monitor, jab tak process alive hai
-            do {
-              # Check logs for "listening at"
-              $lastLines = Get-Content "$env:RUNNER_TEMP/bore_out.log" -Tail 20
-              foreach ($line in $lastLines) {
-                if ($line -match "listening at (\S+:\d+)") {
-                  Write-Host "🔥🔥 RDP CONNECT KAR: $($matches[1]) 🔥🔥"
+          # Function: Start Bore and capture tunnel address
+          function Start-BoreTunnel {
+            Write-Host "🌀 Bore start ho raha..."
+            if ($global:boreProcess -and !$global:boreProcess.HasExited) {
+              $global:boreProcess.Kill()
+              Start-Sleep -Seconds 2
+            }
+            $proc = Start-Process -FilePath ".\bore.exe" -ArgumentList 'local 3389 --to bore.pub' -NoNewWindow -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP/bore_stdout.txt" -RedirectStandardError "$env:RUNNER_TEMP/bore_stderr.txt"
+            $global:boreProcess = $proc
+            # Wait for "listening at" line (max 15 sec)
+            $found = $false
+            for ($i=0; $i -lt 30; $i++) {
+              if ($proc.HasExited) {
+                Write-Host "❌ Bore process crash ho gaya, exit code: $($proc.ExitCode)"
+                return $false
+              }
+              $lines = Get-Content "$env:RUNNER_TEMP/bore_stdout.txt" -ErrorAction SilentlyContinue
+              foreach ($line in $lines) {
+                if ($line -match "listening at ((bore\.pub|\S+):(\d+))") {
+                  $global:TunnelAddress = $matches[2]
+                  $global:TunnelPort = $matches[3]
+                  Write-Host "🔥🔥 RDP CONNECT KAR: ${global:TunnelAddress}:${global:TunnelPort} 🔥🔥"
+                  $found = $true
+                  break
                 }
               }
-              Start-Sleep -Seconds 10
-            } while (-not $proc.HasExited)
-            
-            # Agar bore mar gaya, to 5 sec mein re-launch
-            Write-Host "💤 Bore band, 5 sec mein restart..."
-            Start-Sleep -Seconds 5
+              if ($found) { break }
+              Start-Sleep -Milliseconds 500
+            }
+            if (-not $found) {
+              Write-Host "❌ Tunnel address nahi mila, restart hoga"
+              return $false
+            }
+            return $true
           }
-          # Note: $rdpJob background mein chalta rahega
+
+          # Keep RDP service alive in background
+          Start-Job -ScriptBlock {
+            while ($true) {
+              try {
+                $srv = Get-Service TermService -ErrorAction Stop
+                if ($srv.Status -ne 'Running') { Start-Service TermService }
+              } catch { }
+              Start-Sleep -Seconds 120
+            }
+          } | Out-Null
+
+          # Main eternal loop
+          while ($true) {
+            # Start or restart tunnel
+            $started = Start-BoreTunnel
+            if (-not $started) {
+              Write-Host "💀 Tunnel start fail, 5 sec mein retry..."
+              Start-Sleep -Seconds 5
+              continue
+            }
+
+            # Health check loop
+            $failCount = 0
+            while ($true) {
+              # If bore process dies, break out to restart
+              if ($global:boreProcess.HasExited) {
+                Write-Host "💥 Bore process suddently died, restart tunnel"
+                break
+              }
+              # Test current tunnel endpoint
+              $alive = Test-Tunnel -address $global:TunnelAddress -port $global:TunnelPort
+              if (-not $alive) {
+                $failCount++
+                Write-Host "⏳ Tunnel unresponsive ($failCount/3)..."
+                if ($failCount -ge 3) {
+                  Write-Host "☠️ Tunnel dead after 3 fails, killing bore and restart"
+                  $global:boreProcess.Kill()
+                  break
+                }
+              } else {
+                $failCount = 0
+                Write-Host "✅ Tunnel alive" -ForegroundColor Green
+              }
+              Start-Sleep -Seconds 10
+            }
+          }
