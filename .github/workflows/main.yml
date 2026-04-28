@@ -1,0 +1,41 @@
+name: ROWDYX FREE RDP 😈
+
+on: 
+  workflow_dispatch:  # Manual trigger se chalayega, chep mat ban
+
+jobs:
+  rdp-bore:
+    runs-on: windows-latest
+    timeout-minutes: 360  # 6 hours max, baad mein tujhe firse trigger karna padega
+    steps:
+      - name: 🖥️ RDP Enable Karna & Password Set
+        shell: pwsh
+        run: |
+          # RDP ko on kar (registry + firewall)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          # User 'runneradmin' ke liye password set kar (change kar lena apna mann chahe)
+          $pw = ConvertTo-SecureString "RowdyX@1234" -AsPlainText -Force
+          Set-LocalUser -Name "runneradmin" -Password $pw
+          Write-Host "RDP Ready! User: runneradmin Pass: RowdyX@1234"
+
+      - name: 🛠️ Bore Download & Setup
+        shell: pwsh
+        run: |
+          # Bore ka latest release download (windows binary)
+          $url = "https://github.com/ekzhang/bore/releases/download/v0.5.2/bore-v0.5.2-x86_64-pc-windows-msvc.zip"
+          Invoke-WebRequest -Uri $url -OutFile bore.zip
+          Expand-Archive bore.zip -DestinationPath .\
+          # Bore ko chalao, output ko log me dikhao, background mein mat bhejo taaki tunnel alive rahe
+          Write-Host "⏳ Tunnel start ho raha hai..." 
+          .\bore.exe local 3389 --to bore.pub 2>&1 | ForEach-Object {
+            # Bore ka output capture karo, public address alag karo
+            if ($_ -match "listening at (\S+:\d+)") {
+              $tunnel_addr = $matches[1]
+              Write-Host "🔥🔥 RDP CONNECT KAR: $tunnel_addr 🔥🔥"
+            }
+            Write-Host $_
+          }
+          # Note: Bore background mein chalta rahega, lekin jab tak pipeline alive hai
+          # Hum infinite wait daalte hain taaki step end na ho
+          Start-Sleep -Seconds 36000  # 10 ghanta, timeout-minutes se kam
